@@ -1,7 +1,5 @@
+import MainApp from "@/components/MainApp";
+
 export default function Home() {
-  return (
-    <main>
-      <div>Hello world!</div>
-    </main>
-  );
+  return <MainApp />;
 }
