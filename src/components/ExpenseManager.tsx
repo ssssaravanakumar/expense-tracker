@@ -12,7 +12,6 @@ import { format } from "date-fns";
 export const ExpenseManager: React.FC = () => {
   const {
     currentBudget,
-    addFixedExpense,
     addManualExpense,
     topupCategory,
     editExpense,
