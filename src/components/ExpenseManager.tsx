@@ -77,9 +77,6 @@ export const ExpenseManager: React.FC = () => {
     label: cat.name,
   }));
 
-  const variableSavingsCategory = currentBudget.categories.find(
-    (cat) => cat.type === "variable_savings"
-  );
   const topupFromOptions = currentBudget.categories
     .filter(
       (cat) =>

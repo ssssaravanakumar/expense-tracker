@@ -7,7 +7,7 @@ import {
   getTotalPredefinedFixedExpenses,
 } from "@/store/useExpenseStore";
 import { Card, Button, Input } from "@/components/ui";
-import { DollarSign, Plus, Edit3 } from "lucide-react";
+import { DollarSign, Edit3 } from "lucide-react";
 
 export const BudgetSetup: React.FC = () => {
   const {

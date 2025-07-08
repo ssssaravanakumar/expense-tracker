@@ -79,9 +79,6 @@ export const useExpenseStore = create<ExpenseStore>()(
 
       createMonthlyBudget: (salary: number) => {
         const currentMonth = get().getCurrentMonth();
-        const fixedExpensesCategory = defaultCategories.find(
-          (cat) => cat.type === "fixed_expenses"
-        );
         const totalPredefinedAmount = getTotalPredefinedFixedExpenses();
 
         const categories: BudgetCategory[] = defaultCategories.map((cat) => ({

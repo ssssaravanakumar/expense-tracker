@@ -6,7 +6,7 @@ import { BudgetSetup } from "@/components/BudgetSetup";
 import { ExpenseManager } from "@/components/ExpenseManager";
 import { Reports } from "@/components/Reports";
 import { useExpenseStore } from "@/store/useExpenseStore";
-import { Home, Settings, Plus, BarChart3, FileText } from "lucide-react";
+import { Settings, Plus, BarChart3, FileText } from "lucide-react";
 
 const MainApp: React.FC = () => {
   const [activeTab, setActiveTab] = useState<
