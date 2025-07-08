@@ -6,15 +6,7 @@ import {
   predefinedFixedExpenses,
 } from "@/store/useExpenseStore";
 import { Card, Button, Input, Select } from "@/components/ui";
-import {
-  Plus,
-  ArrowUpDown,
-  Calendar,
-  Edit3,
-  Trash2,
-  Save,
-  X,
-} from "lucide-react";
+import { Plus, ArrowUpDown, Edit3, Trash2, Save, X } from "lucide-react";
 import { format } from "date-fns";
 
 export const ExpenseManager: React.FC = () => {
@@ -126,22 +118,6 @@ export const ExpenseManager: React.FC = () => {
     }
   };
 
-  const handleAddFixedExpense = () => {
-    if (fixedExpenseName && fixedExpenseAmount && fixedExpenseCategory) {
-      addFixedExpense(
-        fixedExpenseCategory,
-        fixedExpenseName,
-        parseFloat(fixedExpenseAmount),
-        fixedExpenseDueDate || undefined
-      );
-      setFixedExpenseName("");
-      setFixedExpenseAmount("");
-      setFixedExpenseCategory("");
-      setFixedExpenseDueDate("");
-      setSelectedPredefinedExpense("");
-    }
-  };
-
   const handleAddManualExpense = () => {
     if (
       manualExpenseAmount &&
@@ -208,15 +184,6 @@ export const ExpenseManager: React.FC = () => {
   const handleDeleteExpense = (expenseId: string) => {
     deleteExpense(expenseId);
   };
-
-  const fixedExpensesByCategory = currentBudget.categories
-    .map((category) => ({
-      ...category,
-      fixedExpenses: currentBudget.fixedExpenses.filter(
-        (exp) => exp.categoryId === category.id
-      ),
-    }))
-    .filter((cat) => cat.fixedExpenses.length > 0);
 
   const recentExpenses = currentBudget.expenses
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
