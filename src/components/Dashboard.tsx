@@ -169,7 +169,7 @@ export const Dashboard: React.FC = () => {
           </ResponsiveContainer>
         </div>
         <div className="grid grid-cols-2 gap-2 mt-4">
-          {pieData.map((entry, index) => (
+          {pieData.map((entry) => (
             <div key={entry.name} className="flex items-center">
               <div
                 className="w-3 h-3 rounded-full mr-2"

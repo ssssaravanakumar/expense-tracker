@@ -6,21 +6,12 @@ import {
   predefinedFixedExpenses,
 } from "@/store/useExpenseStore";
 import { Card, Button, Input, Select } from "@/components/ui";
-import {
-  Plus,
-  ArrowUpDown,
-  Calendar,
-  Edit3,
-  Trash2,
-  Save,
-  X,
-} from "lucide-react";
+import { Plus, ArrowUpDown, Edit3, Trash2, Save, X } from "lucide-react";
 import { format } from "date-fns";
 
 export const ExpenseManager: React.FC = () => {
   const {
     currentBudget,
-    addFixedExpense,
     addManualExpense,
     topupCategory,
     editExpense,
@@ -77,9 +68,6 @@ export const ExpenseManager: React.FC = () => {
     label: cat.name,
   }));
 
-  const variableSavingsCategory = currentBudget.categories.find(
-    (cat) => cat.type === "variable_savings"
-  );
   const topupFromOptions = currentBudget.categories
     .filter(
       (cat) =>
@@ -129,42 +117,27 @@ export const ExpenseManager: React.FC = () => {
     }
   };
 
-  const handleAddFixedExpense = () => {
-    if (fixedExpenseName && fixedExpenseAmount && fixedExpenseCategory) {
-      addFixedExpense(
-        fixedExpenseCategory,
-        fixedExpenseName,
-        parseFloat(fixedExpenseAmount),
-        fixedExpenseDueDate || undefined
-      );
-      setFixedExpenseName("");
-      setFixedExpenseAmount("");
-      setFixedExpenseCategory("");
-      setFixedExpenseDueDate("");
-      setSelectedPredefinedExpense("");
-    }
-  };
-
-  const handleAddManualExpense = () => {
+  const handleAddManualExpense = async () => {
     if (
       manualExpenseAmount &&
       manualExpenseDescription &&
       manualExpenseCategory
     ) {
-      // Use the selected date instead of current date
-      const expenseDate = manualExpenseDate
-        ? new Date(manualExpenseDate)
-        : new Date();
-      addManualExpense(
-        manualExpenseCategory,
-        parseFloat(manualExpenseAmount),
-        manualExpenseDescription,
-        expenseDate.toISOString()
-      );
-      setManualExpenseAmount("");
-      setManualExpenseDescription("");
-      setManualExpenseCategory("");
-      setManualExpenseDate(format(new Date(), "yyyy-MM-dd")); // Reset to current date
+      try {
+        await addManualExpense(
+          manualExpenseCategory,
+          parseFloat(manualExpenseAmount),
+          manualExpenseDescription,
+          manualExpenseDate || undefined
+        );
+        // Reset form only after successful sync
+        setManualExpenseCategory("");
+        setManualExpenseAmount("");
+        setManualExpenseDescription("");
+        setManualExpenseDate(format(new Date(), "yyyy-MM-dd")); // Reset to current date
+      } catch (error) {
+        console.error("Failed to add expense:", error);
+      }
     }
   };
 
@@ -211,15 +184,6 @@ export const ExpenseManager: React.FC = () => {
   const handleDeleteExpense = (expenseId: string) => {
     deleteExpense(expenseId);
   };
-
-  const fixedExpensesByCategory = currentBudget.categories
-    .map((category) => ({
-      ...category,
-      fixedExpenses: currentBudget.fixedExpenses.filter(
-        (exp) => exp.categoryId === category.id
-      ),
-    }))
-    .filter((cat) => cat.fixedExpenses.length > 0);
 
   const recentExpenses = currentBudget.expenses
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())

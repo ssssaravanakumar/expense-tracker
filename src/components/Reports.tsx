@@ -3,13 +3,8 @@
 import React, { useState, useMemo } from "react";
 import { useExpenseStore } from "@/store/useExpenseStore";
 import { Card, Button, Input, Select } from "@/components/ui";
-import {
-  Calendar,
-  Filter,
-  Download,
-  TrendingUp,
-  TrendingDown,
-} from "lucide-react";
+
+import { Filter, Download, TrendingUp, TrendingDown } from "lucide-react";
 import {
   format,
   startOfMonth,
@@ -31,28 +26,16 @@ export const Reports: React.FC = () => {
   const [sortBy, setSortBy] = useState<"date" | "amount" | "category">("date");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
-  if (!currentBudget) {
-    return (
-      <div className="p-4 text-center">
-        <Card>
-          <h3 className="text-lg font-medium text-gray-900 mb-2">
-            No Budget Found
-          </h3>
-          <p className="text-gray-600">
-            Please set up your monthly budget first.
-          </p>
-        </Card>
-      </div>
-    );
-  }
-
-  const categoryOptions = [
-    { value: "all", label: "All Categories" },
-    ...currentBudget.categories.map((cat) => ({
-      value: cat.id,
-      label: cat.name,
-    })),
-  ];
+  const categoryOptions = useMemo(() => {
+    if (!currentBudget) return [];
+    return [
+      { value: "all", label: "All Categories" },
+      ...currentBudget.categories.map((cat) => ({
+        value: cat.id,
+        label: cat.name,
+      })),
+    ];
+  }, [currentBudget]);
 
   const typeOptions = [
     { value: "all", label: "All Types" },
@@ -61,6 +44,8 @@ export const Reports: React.FC = () => {
   ];
 
   const filteredExpenses = useMemo(() => {
+    if (!currentBudget) return [];
+
     let expenses = currentBudget.expenses;
 
     // Date filter
@@ -114,17 +99,26 @@ export const Reports: React.FC = () => {
 
     return expenses;
   }, [
-    currentBudget.expenses,
+    currentBudget,
     dateFrom,
     dateTo,
     selectedCategory,
     expenseType,
     sortBy,
     sortOrder,
-    currentBudget.categories,
   ]);
 
   const reportSummary = useMemo(() => {
+    if (!currentBudget) {
+      return {
+        totalAmount: 0,
+        expenseCount: 0,
+        avgExpense: 0,
+        categoryBreakdown: [],
+        typeBreakdown: { manual: 0, fixed: 0 },
+      };
+    }
+
     const totalAmount = filteredExpenses.reduce(
       (sum, exp) => sum + exp.amount,
       0
@@ -166,9 +160,11 @@ export const Reports: React.FC = () => {
       categoryBreakdown,
       typeBreakdown,
     };
-  }, [filteredExpenses, currentBudget.categories]);
+  }, [filteredExpenses, currentBudget]);
 
   const exportToCSV = () => {
+    if (!currentBudget) return;
+
     const headers = ["Date", "Category", "Description", "Amount", "Type"];
     const csvData = filteredExpenses.map((expense) => {
       const category = currentBudget.categories.find(
@@ -195,6 +191,21 @@ export const Reports: React.FC = () => {
     a.click();
     window.URL.revokeObjectURL(url);
   };
+
+  if (!currentBudget) {
+    return (
+      <div className="p-4 text-center">
+        <Card>
+          <h3 className="text-lg font-medium text-gray-900 mb-2">
+            No Budget Found
+          </h3>
+          <p className="text-gray-600">
+            Please set up your monthly budget first.
+          </p>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 space-y-4">
