@@ -7,14 +7,16 @@ import {
   getTotalPredefinedFixedExpenses,
 } from "@/store/useExpenseStore";
 import { Card, Button, Input } from "@/components/ui";
+
 import { DollarSign, Edit3 } from "lucide-react";
+import { format, parseISO } from "date-fns";
 
 export const BudgetSetup: React.FC = () => {
   const {
     currentBudget,
+    selectedMonth,
     createMonthlyBudget,
     updateCategoryAllocation,
-    getCurrentMonth,
   } = useExpenseStore();
   const [salary, setSalary] = useState("");
   const [editingCategory, setEditingCategory] = useState<string | null>(null);
@@ -22,7 +24,7 @@ export const BudgetSetup: React.FC = () => {
 
   const handleCreateBudget = () => {
     if (salary && parseFloat(salary) > 0) {
-      createMonthlyBudget(parseFloat(salary));
+      createMonthlyBudget(parseFloat(salary), selectedMonth);
       setSalary("");
     }
   };
@@ -49,9 +51,13 @@ export const BudgetSetup: React.FC = () => {
     ? currentBudget.totalSalary - totalAllocated
     : 0;
 
+  const formatDisplayMonth = (month: string) => {
+    return format(parseISO(month + "-01"), "MMMM yyyy");
+  };
+
   if (!currentBudget) {
     return (
-      <div className="p-4">
+      <div className="p-4 space-y-4">
         <Card>
           <div className="text-center mb-6">
             <DollarSign className="mx-auto h-12 w-12 text-blue-600 mb-4" />
@@ -59,7 +65,8 @@ export const BudgetSetup: React.FC = () => {
               Setup Monthly Budget
             </h2>
             <p className="text-gray-600">
-              Enter your salary for {getCurrentMonth()} to get started
+              Enter your salary for {formatDisplayMonth(selectedMonth)} to get
+              started
             </p>
           </div>
 
@@ -77,7 +84,7 @@ export const BudgetSetup: React.FC = () => {
             disabled={!salary || parseFloat(salary) <= 0}
             className="w-full"
           >
-            Create Budget
+            Create Budget for {formatDisplayMonth(selectedMonth)}
           </Button>
         </Card>
       </div>

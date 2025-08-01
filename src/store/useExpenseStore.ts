@@ -8,13 +8,36 @@ import {
   MonthlyBudget,
   DashboardData,
 } from "@/types";
+import { firestoreService, FamilyMember } from "@/services/firestoreService";
 
-interface ExpenseStore {
+interface ExpenseStoreState {
   currentBudget: MonthlyBudget | null;
   budgetHistory: MonthlyBudget[];
+  selectedMonth: string;
+
+  // Firestore sync state
+  isInitializing: boolean;
+  isSyncing: boolean;
+  syncError: string | null;
+  lastSyncTime: number | null;
+  isListenerActive: boolean; // Add this flag
+
+  // Family state
+  familyId: string | null;
+  familyMembers: FamilyMember[];
+  currentMember: FamilyMember | null;
 
   // Actions
-  createMonthlyBudget: (salary: number) => void;
+  setSelectedMonth: (month: string) => void;
+
+  // Firestore actions
+  initializeFirestore: () => Promise<void>;
+  createOrJoinFamily: (familyId?: string) => Promise<string>;
+  setMemberName: (name: string) => void;
+  syncToFirestore: () => Promise<void>;
+  loadFromFirestore: () => Promise<void>;
+
+  createMonthlyBudget: (salary: number, month?: string) => void;
   updateCategoryAllocation: (categoryId: string, amount: number) => void;
   addFixedExpense: (
     categoryId: string,
@@ -28,7 +51,7 @@ interface ExpenseStore {
     amount: number,
     description: string,
     date?: string
-  ) => void;
+  ) => Promise<void>;
   editExpense: (
     expenseId: string,
     categoryId: string,
@@ -69,49 +92,263 @@ const predefinedFixedExpenses = [
 const getTotalPredefinedFixedExpenses = () =>
   predefinedFixedExpenses.reduce((sum, expense) => sum + expense.amount, 0);
 
-export const useExpenseStore = create<ExpenseStore>()(
+export const useExpenseStore = create<ExpenseStoreState>()(
   persist(
     (set, get) => ({
       currentBudget: null,
       budgetHistory: [],
+      selectedMonth: format(new Date(), "yyyy-MM"),
 
-      getCurrentMonth: () => format(new Date(), "yyyy-MM"),
+      // Firestore state
+      isInitializing: false,
+      isSyncing: false,
+      syncError: null,
+      lastSyncTime: null,
+      isListenerActive: false, // Add flag to prevent multiple listeners
 
-      createMonthlyBudget: (salary: number) => {
-        const currentMonth = get().getCurrentMonth();
-        const totalPredefinedAmount = getTotalPredefinedFixedExpenses();
+      // Family state
+      familyId: null,
+      familyMembers: [],
+      currentMember: null,
 
-        const categories: BudgetCategory[] = defaultCategories.map((cat) => ({
-          id: `${cat.type}_${Date.now()}`,
-          name: cat.name,
-          type: cat.type,
-          // Auto-fill Fixed Expenses with predefined total
-          allocatedAmount:
-            cat.type === "fixed_expenses" ? totalPredefinedAmount : 0,
-          spentAmount: 0,
-          month: currentMonth,
-        }));
+      initializeFirestore: async () => {
+        const state = get();
+        if (state.isInitializing || state.isListenerActive) return; // Prevent duplicate calls
 
-        // Auto-add predefined fixed expenses
-        const fixedExpensesCategoryId = categories.find(
+        set({ isInitializing: true, syncError: null });
+
+        try {
+          await firestoreService.initialize();
+          const familyId = firestoreService.getFamilyId();
+          const currentMember = firestoreService.getCurrentMember();
+
+          set({
+            familyId,
+            currentMember,
+            isInitializing: false,
+          });
+
+          // Only set up listener if we have a family and don't already have one
+          if (familyId && !state.isListenerActive) {
+            set({ isListenerActive: true });
+
+            // Set up real-time listener
+            firestoreService.subscribeToFamilyUpdates((budgets, updatedBy) => {
+              console.log(`📡 Real-time update from member: ${updatedBy}`);
+              const currentState = get();
+
+              // Prevent self-updates to avoid loops
+              if (updatedBy === firestoreService.getMemberId()) return;
+
+              const currentBudget = budgets.find(
+                (b) => b.month === currentState.selectedMonth
+              );
+
+              set({
+                budgetHistory: budgets,
+                currentBudget: currentBudget || currentState.currentBudget,
+                lastSyncTime: Date.now(),
+              });
+            });
+
+            // Load initial data only once
+            await get().loadFromFirestore();
+          }
+        } catch (error) {
+          console.error("Failed to initialize Firestore:", error);
+          set({
+            syncError:
+              error instanceof Error ? error.message : "Failed to initialize",
+            isInitializing: false,
+          });
+        }
+      },
+
+      createOrJoinFamily: async (familyId?: string) => {
+        set({ isSyncing: true, syncError: null });
+
+        try {
+          const newFamilyId = await firestoreService.createOrJoinFamily(
+            familyId
+          );
+          const currentMember = firestoreService.getCurrentMember();
+
+          set({
+            familyId: newFamilyId,
+            currentMember,
+            isSyncing: false,
+          });
+
+          // Set up real-time listener only if not already active
+          const state = get();
+          if (!state.isListenerActive) {
+            set({ isListenerActive: true });
+
+            firestoreService.subscribeToFamilyUpdates((budgets, updatedBy) => {
+              console.log(`📡 Real-time update from member: ${updatedBy}`);
+              const currentState = get();
+
+              // Prevent self-updates to avoid loops
+              if (updatedBy === firestoreService.getMemberId()) return;
+
+              const currentBudget = budgets.find(
+                (b) => b.month === currentState.selectedMonth
+              );
+
+              set({
+                budgetHistory: budgets,
+                currentBudget: currentBudget || currentState.currentBudget,
+                lastSyncTime: Date.now(),
+              });
+            });
+          }
+
+          // Sync local data to Firestore (without loading back)
+          const localBudgets = get().budgetHistory;
+          if (localBudgets.length > 0) {
+            await get().syncToFirestore();
+          } else {
+            // Only load if we have no local data
+            await get().loadFromFirestore();
+          }
+
+          return newFamilyId;
+        } catch (error) {
+          console.error("Failed to create/join family:", error);
+          set({
+            syncError:
+              error instanceof Error
+                ? error.message
+                : "Failed to create/join family",
+            isSyncing: false,
+          });
+          throw error;
+        }
+      },
+
+      setMemberName: (name: string) => {
+        firestoreService.setMemberName(name);
+        set({
+          currentMember: {
+            ...get().currentMember!,
+            name,
+          },
+        });
+      },
+
+      syncToFirestore: async () => {
+        const state = get();
+        if (!state.familyId || state.budgetHistory.length === 0) return;
+
+        set({ isSyncing: true, syncError: null });
+
+        try {
+          // Sync all budgets to Firestore
+          for (const budget of state.budgetHistory) {
+            await firestoreService.saveBudget(budget);
+          }
+
+          set({
+            isSyncing: false,
+            lastSyncTime: Date.now(),
+            syncError: null,
+          });
+        } catch (error) {
+          console.error("Failed to sync to Firestore:", error);
+          set({
+            syncError: error instanceof Error ? error.message : "Sync failed",
+            isSyncing: false,
+          });
+        }
+      },
+
+      loadFromFirestore: async () => {
+        const state = get();
+        if (!state.familyId) return;
+
+        set({ isSyncing: true, syncError: null });
+
+        try {
+          const budgets = await firestoreService.getBudgets();
+          const currentBudget = budgets.find(
+            (b) => b.month === state.selectedMonth
+          );
+
+          set({
+            budgetHistory: budgets,
+            currentBudget: currentBudget || state.currentBudget,
+            isSyncing: false,
+            lastSyncTime: Date.now(),
+            syncError: null,
+          });
+        } catch (error) {
+          console.error("Failed to load from Firestore:", error);
+          set({
+            syncError: error instanceof Error ? error.message : "Load failed",
+            isSyncing: false,
+          });
+        }
+      },
+
+      setSelectedMonth: (month: string) => {
+        set({ selectedMonth: month });
+
+        const state = get();
+        const budget = state.budgetHistory.find((b) => b.month === month);
+
+        if (budget) {
+          set({ currentBudget: budget });
+        } else {
+          set({ currentBudget: null });
+        }
+      },
+
+      createMonthlyBudget: async (salary: number, month?: string) => {
+        const currentMonth = month || get().getCurrentMonth();
+        const budgetId = `budget_${currentMonth}_${Date.now()}`;
+
+        const categories: BudgetCategory[] = defaultCategories.map(
+          (category) => ({
+            id: `${category.name
+              .toLowerCase()
+              .replace(/\s+/g, "_")}_${Date.now()}_${Math.random()}`,
+            name: category.name,
+            type: category.type,
+            allocatedAmount: 0,
+            spentAmount: 0,
+            month: currentMonth,
+          })
+        );
+
+        const fixedExpenseCategory = categories.find(
           (cat) => cat.type === "fixed_expenses"
-        )?.id;
-        const predefinedExpenses: FixedExpense[] = fixedExpensesCategoryId
-          ? predefinedFixedExpenses.map((expense, index) => ({
-              id: `predefined_expense_${Date.now()}_${index}`,
+        );
+        const fixedExpenses: FixedExpense[] = [];
+
+        if (fixedExpenseCategory) {
+          predefinedFixedExpenses.forEach((expense) => {
+            fixedExpenses.push({
+              id: `${expense.name
+                .toLowerCase()
+                .replace(/\s+/g, "_")}_${Date.now()}_${Math.random()}`,
+              categoryId: fixedExpenseCategory.id,
               name: expense.name,
               amount: expense.amount,
               isCompleted: false,
-              categoryId: fixedExpensesCategoryId,
-            }))
-          : [];
+              dueDate: format(new Date(), "yyyy-MM-dd"),
+            });
+          });
+
+          fixedExpenseCategory.allocatedAmount =
+            getTotalPredefinedFixedExpenses();
+        }
 
         const newBudget: MonthlyBudget = {
-          id: `budget_${Date.now()}`,
+          id: budgetId,
           month: currentMonth,
           totalSalary: salary,
           categories,
-          fixedExpenses: predefinedExpenses,
+          fixedExpenses,
           expenses: [],
           createdAt: new Date().toISOString(),
         };
@@ -120,9 +357,14 @@ export const useExpenseStore = create<ExpenseStore>()(
           currentBudget: newBudget,
           budgetHistory: [...state.budgetHistory, newBudget],
         }));
+
+        // Auto-sync to Firestore if connected
+        if (get().familyId) {
+          await get().syncToFirestore();
+        }
       },
 
-      updateCategoryAllocation: (categoryId: string, amount: number) => {
+      updateCategoryAllocation: async (categoryId: string, amount: number) => {
         set((state) => {
           if (!state.currentBudget) return state;
 
@@ -135,34 +377,40 @@ export const useExpenseStore = create<ExpenseStore>()(
             categories: updatedCategories,
           };
 
+          const updatedHistory = state.budgetHistory.map((budget) =>
+            budget.id === state.currentBudget?.id ? updatedBudget : budget
+          );
+
           return {
             currentBudget: updatedBudget,
-            budgetHistory: state.budgetHistory.map((budget) =>
-              budget.id === updatedBudget.id ? updatedBudget : budget
-            ),
+            budgetHistory: updatedHistory,
           };
         });
+
+        // Auto-sync to Firestore if connected
+        if (get().familyId) {
+          await get().syncToFirestore();
+        }
       },
 
-      addFixedExpense: (
+      addFixedExpense: async (
         categoryId: string,
         name: string,
         amount: number,
         dueDate?: string
       ) => {
-        const expenseId = `expense_${Date.now()}`;
+        const expenseId = `fixed_${Date.now()}_${Math.random()}`;
+        const newFixedExpense: FixedExpense = {
+          id: expenseId,
+          categoryId,
+          name,
+          amount,
+          isCompleted: false,
+          dueDate: dueDate || format(new Date(), "yyyy-MM-dd"),
+        };
 
         set((state) => {
           if (!state.currentBudget) return state;
-
-          const newFixedExpense: FixedExpense = {
-            id: expenseId,
-            name,
-            amount,
-            isCompleted: false,
-            dueDate,
-            categoryId,
-          };
 
           const updatedBudget = {
             ...state.currentBudget,
@@ -172,40 +420,45 @@ export const useExpenseStore = create<ExpenseStore>()(
             ],
           };
 
+          const updatedHistory = state.budgetHistory.map((budget) =>
+            budget.id === state.currentBudget?.id ? updatedBudget : budget
+          );
+
           return {
             currentBudget: updatedBudget,
-            budgetHistory: state.budgetHistory.map((budget) =>
-              budget.id === updatedBudget.id ? updatedBudget : budget
-            ),
+            budgetHistory: updatedHistory,
           };
         });
+
+        // Auto-sync to Firestore if connected
+        if (get().familyId) {
+          await get().syncToFirestore();
+        }
       },
 
-      markFixedExpenseComplete: (expenseId: string) => {
+      markFixedExpenseComplete: async (expenseId: string) => {
         set((state) => {
           if (!state.currentBudget) return state;
 
           const fixedExpense = state.currentBudget.fixedExpenses.find(
-            (exp) => exp.id === expenseId
+            (fe) => fe.id === expenseId
           );
-          if (!fixedExpense) return state;
+          if (!fixedExpense || fixedExpense.isCompleted) return state;
 
-          // Mark as completed and add to expenses
-          const updatedFixedExpenses = state.currentBudget.fixedExpenses.map(
-            (exp) =>
-              exp.id === expenseId ? { ...exp, isCompleted: true } : exp
-          );
-
-          const newExpense: Expense = {
-            id: `manual_expense_${Date.now()}`,
+          const manualExpenseId = `expense_${Date.now()}_${Math.random()}`;
+          const newManualExpense: Expense = {
+            id: manualExpenseId,
             categoryId: fixedExpense.categoryId,
             amount: fixedExpense.amount,
-            description: `Fixed expense: ${fixedExpense.name}`,
+            description: fixedExpense.name,
             date: new Date().toISOString(),
             type: "fixed",
           };
 
-          // Update category spent amount
+          const updatedFixedExpenses = state.currentBudget.fixedExpenses.map(
+            (fe) => (fe.id === expenseId ? { ...fe, isCompleted: true } : fe)
+          );
+
           const updatedCategories = state.currentBudget.categories.map((cat) =>
             cat.id === fixedExpense.categoryId
               ? { ...cat, spentAmount: cat.spentAmount + fixedExpense.amount }
@@ -215,40 +468,45 @@ export const useExpenseStore = create<ExpenseStore>()(
           const updatedBudget = {
             ...state.currentBudget,
             fixedExpenses: updatedFixedExpenses,
-            expenses: [...state.currentBudget.expenses, newExpense],
+            expenses: [...state.currentBudget.expenses, newManualExpense],
             categories: updatedCategories,
           };
 
+          const updatedHistory = state.budgetHistory.map((budget) =>
+            budget.id === state.currentBudget?.id ? updatedBudget : budget
+          );
+
           return {
             currentBudget: updatedBudget,
-            budgetHistory: state.budgetHistory.map((budget) =>
-              budget.id === updatedBudget.id ? updatedBudget : budget
-            ),
+            budgetHistory: updatedHistory,
           };
         });
+
+        // Auto-sync to Firestore if connected
+        if (get().familyId) {
+          await get().syncToFirestore();
+        }
       },
 
-      addManualExpense: (
+      addManualExpense: async (
         categoryId: string,
         amount: number,
         description: string,
         date?: string
       ) => {
+        const expenseId = `expense_${Date.now()}_${Math.random()}`;
+        const newExpense: Expense = {
+          id: expenseId,
+          categoryId,
+          amount,
+          description,
+          date: date || new Date().toISOString(),
+          type: "manual",
+        };
+
         set((state) => {
           if (!state.currentBudget) return state;
 
-          const newExpense: Expense = {
-            id: `manual_expense_${Date.now()}`,
-            categoryId,
-            amount,
-            description,
-            date: date
-              ? new Date(date).toISOString()
-              : new Date().toISOString(),
-            type: "manual",
-          };
-
-          // Update category spent amount
           const updatedCategories = state.currentBudget.categories.map((cat) =>
             cat.id === categoryId
               ? { ...cat, spentAmount: cat.spentAmount + amount }
@@ -261,16 +519,23 @@ export const useExpenseStore = create<ExpenseStore>()(
             categories: updatedCategories,
           };
 
+          const updatedHistory = state.budgetHistory.map((budget) =>
+            budget.id === state.currentBudget?.id ? updatedBudget : budget
+          );
+
           return {
             currentBudget: updatedBudget,
-            budgetHistory: state.budgetHistory.map((budget) =>
-              budget.id === updatedBudget.id ? updatedBudget : budget
-            ),
+            budgetHistory: updatedHistory,
           };
         });
+
+        // Auto-sync to Firestore if connected
+        if (get().familyId) {
+          await get().syncToFirestore();
+        }
       },
 
-      editExpense: (
+      editExpense: async (
         expenseId: string,
         categoryId: string,
         amount: number,
@@ -280,35 +545,29 @@ export const useExpenseStore = create<ExpenseStore>()(
         set((state) => {
           if (!state.currentBudget) return state;
 
-          // Find the original expense to calculate category adjustments
-          const originalExpense = state.currentBudget.expenses.find(
-            (exp) => exp.id === expenseId
+          const expense = state.currentBudget.expenses.find(
+            (e) => e.id === expenseId
           );
-          if (!originalExpense) return state;
+          if (!expense) return state;
 
-          // Update the expense
+          const oldAmount = expense.amount;
+          const oldCategoryId = expense.categoryId;
+
           const updatedExpenses = state.currentBudget.expenses.map((exp) =>
             exp.id === expenseId
               ? { ...exp, categoryId, amount, description, date }
               : exp
           );
 
-          // Recalculate category spent amounts
           const updatedCategories = state.currentBudget.categories.map(
             (cat) => {
-              let newSpentAmount = cat.spentAmount;
-
-              // Remove original expense amount from original category
-              if (cat.id === originalExpense.categoryId) {
-                newSpentAmount -= originalExpense.amount;
+              if (cat.id === oldCategoryId) {
+                return { ...cat, spentAmount: cat.spentAmount - oldAmount };
               }
-
-              // Add new expense amount to new category
               if (cat.id === categoryId) {
-                newSpentAmount += amount;
+                return { ...cat, spentAmount: cat.spentAmount + amount };
               }
-
-              return { ...cat, spentAmount: newSpentAmount };
+              return cat;
             }
           );
 
@@ -318,36 +577,38 @@ export const useExpenseStore = create<ExpenseStore>()(
             categories: updatedCategories,
           };
 
+          const updatedHistory = state.budgetHistory.map((budget) =>
+            budget.id === state.currentBudget?.id ? updatedBudget : budget
+          );
+
           return {
             currentBudget: updatedBudget,
-            budgetHistory: state.budgetHistory.map((budget) =>
-              budget.id === updatedBudget.id ? updatedBudget : budget
-            ),
+            budgetHistory: updatedHistory,
           };
         });
+
+        // Auto-sync to Firestore if connected
+        if (get().familyId) {
+          await get().syncToFirestore();
+        }
       },
 
-      deleteExpense: (expenseId: string) => {
+      deleteExpense: async (expenseId: string) => {
         set((state) => {
           if (!state.currentBudget) return state;
 
-          // Find the expense to be deleted to adjust category spent amount
-          const expenseToDelete = state.currentBudget.expenses.find(
-            (exp) => exp.id === expenseId
+          const expense = state.currentBudget.expenses.find(
+            (e) => e.id === expenseId
           );
-          if (!expenseToDelete) return state;
+          if (!expense) return state;
 
           const updatedExpenses = state.currentBudget.expenses.filter(
             (exp) => exp.id !== expenseId
           );
 
-          // Update category spent amount by subtracting the deleted expense
           const updatedCategories = state.currentBudget.categories.map((cat) =>
-            cat.id === expenseToDelete.categoryId
-              ? {
-                  ...cat,
-                  spentAmount: cat.spentAmount - expenseToDelete.amount,
-                }
+            cat.id === expense.categoryId
+              ? { ...cat, spentAmount: cat.spentAmount - expense.amount }
               : cat
           );
 
@@ -357,22 +618,42 @@ export const useExpenseStore = create<ExpenseStore>()(
             categories: updatedCategories,
           };
 
+          const updatedHistory = state.budgetHistory.map((budget) =>
+            budget.id === state.currentBudget?.id ? updatedBudget : budget
+          );
+
           return {
             currentBudget: updatedBudget,
-            budgetHistory: state.budgetHistory.map((budget) =>
-              budget.id === updatedBudget.id ? updatedBudget : budget
-            ),
+            budgetHistory: updatedHistory,
           };
         });
+
+        // Auto-sync to Firestore if connected
+        if (get().familyId) {
+          await get().syncToFirestore();
+        }
       },
 
-      topupCategory: (
+      topupCategory: async (
         fromCategoryId: string,
         toCategoryId: string,
         amount: number
       ) => {
         set((state) => {
           if (!state.currentBudget) return state;
+
+          const fromCategory = state.currentBudget.categories.find(
+            (cat) => cat.id === fromCategoryId
+          );
+          const toCategory = state.currentBudget.categories.find(
+            (cat) => cat.id === toCategoryId
+          );
+
+          if (!fromCategory || !toCategory) return state;
+
+          const fromRemaining =
+            fromCategory.allocatedAmount - fromCategory.spentAmount;
+          if (fromRemaining < amount) return state;
 
           const updatedCategories = state.currentBudget.categories.map(
             (cat) => {
@@ -397,13 +678,20 @@ export const useExpenseStore = create<ExpenseStore>()(
             categories: updatedCategories,
           };
 
+          const updatedHistory = state.budgetHistory.map((budget) =>
+            budget.id === state.currentBudget?.id ? updatedBudget : budget
+          );
+
           return {
             currentBudget: updatedBudget,
-            budgetHistory: state.budgetHistory.map((budget) =>
-              budget.id === updatedBudget.id ? updatedBudget : budget
-            ),
+            budgetHistory: updatedHistory,
           };
         });
+
+        // Auto-sync to Firestore if connected
+        if (get().familyId) {
+          await get().syncToFirestore();
+        }
       },
 
       getDashboardData: (): DashboardData => {
@@ -425,6 +713,7 @@ export const useExpenseStore = create<ExpenseStore>()(
           (sum, cat) => sum + cat.spentAmount,
           0
         );
+        const remainingBudget = totalBudget - totalSpent;
 
         const categoryBreakdown = state.currentBudget.categories.map((cat) => ({
           category: cat.name,
@@ -436,17 +725,27 @@ export const useExpenseStore = create<ExpenseStore>()(
         return {
           totalBudget,
           totalSpent,
-          remainingBudget: totalBudget - totalSpent,
+          remainingBudget,
           categoryBreakdown,
         };
+      },
+
+      getCurrentMonth: () => {
+        const state = get();
+        return state.selectedMonth;
       },
     }),
     {
       name: "expense-tracker-storage",
       storage: createJSONStorage(() => localStorage),
+      // Only persist core data, not sync state
+      partialize: (state) => ({
+        selectedMonth: state.selectedMonth,
+        budgetHistory: state.budgetHistory,
+        currentBudget: state.currentBudget,
+      }),
     }
   )
 );
 
-// Export predefined expenses for use in components
 export { predefinedFixedExpenses, getTotalPredefinedFixedExpenses };

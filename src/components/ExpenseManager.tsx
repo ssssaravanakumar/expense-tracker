@@ -117,26 +117,27 @@ export const ExpenseManager: React.FC = () => {
     }
   };
 
-  const handleAddManualExpense = () => {
+  const handleAddManualExpense = async () => {
     if (
       manualExpenseAmount &&
       manualExpenseDescription &&
       manualExpenseCategory
     ) {
-      // Use the selected date instead of current date
-      const expenseDate = manualExpenseDate
-        ? new Date(manualExpenseDate)
-        : new Date();
-      addManualExpense(
-        manualExpenseCategory,
-        parseFloat(manualExpenseAmount),
-        manualExpenseDescription,
-        expenseDate.toISOString()
-      );
-      setManualExpenseAmount("");
-      setManualExpenseDescription("");
-      setManualExpenseCategory("");
-      setManualExpenseDate(format(new Date(), "yyyy-MM-dd")); // Reset to current date
+      try {
+        await addManualExpense(
+          manualExpenseCategory,
+          parseFloat(manualExpenseAmount),
+          manualExpenseDescription,
+          manualExpenseDate || undefined
+        );
+        // Reset form only after successful sync
+        setManualExpenseCategory("");
+        setManualExpenseAmount("");
+        setManualExpenseDescription("");
+        setManualExpenseDate(format(new Date(), "yyyy-MM-dd")); // Reset to current date
+      } catch (error) {
+        console.error("Failed to add expense:", error);
+      }
     }
   };
 
