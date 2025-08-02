@@ -3,7 +3,6 @@ import {
   setDoc,
   getDoc,
   onSnapshot,
-  serverTimestamp,
   Timestamp,
   Unsubscribe,
 } from "firebase/firestore";
@@ -112,7 +111,7 @@ class FirestoreService {
         const familyData: FamilyData = {
           id: newFamilyId,
           budgets: [],
-          lastUpdated: serverTimestamp() as Timestamp,
+          lastUpdated: Timestamp.now(),
           lastUpdatedBy: this.memberId,
           familyName: "Family Expenses",
           members: [
@@ -180,10 +179,22 @@ class FirestoreService {
 
   // Get current family ID
   getFamilyId(): string | null {
-    if (!this.familyId && typeof window !== "undefined") {
-      this.familyId = localStorage.getItem("expense_tracker_family_id");
+    // First check instance variable
+    if (this.familyId) {
+      return this.familyId;
     }
-    return this.familyId;
+
+    // Then check localStorage if in browser
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("expense_tracker_family_id");
+      if (stored) {
+        this.familyId = stored;
+        console.log("📱 Retrieved family ID from localStorage:", stored);
+        return stored;
+      }
+    }
+
+    return null;
   }
 
   // Convert local budget to Firestore format
@@ -406,14 +417,28 @@ class FirestoreService {
     if (typeof window === "undefined") return; // Skip during SSR
 
     const storedFamilyId = localStorage.getItem("expense_tracker_family_id");
+    console.log("🔍 Checking for stored family ID:", storedFamilyId);
+
     if (storedFamilyId) {
       try {
-        await this.createOrJoinFamily(storedFamilyId);
-        console.log("Reconnected to family:", storedFamilyId);
+        // Verify the family still exists
+        const familyDoc = await getDoc(doc(db, "families", storedFamilyId));
+        if (familyDoc.exists()) {
+          this.familyId = storedFamilyId;
+          await this.updateMemberInfo(); // Update member presence
+          console.log("✅ Reconnected to family:", storedFamilyId);
+        } else {
+          console.warn("❌ Stored family no longer exists, cleaning up");
+          localStorage.removeItem("expense_tracker_family_id");
+          this.familyId = null;
+        }
       } catch (error) {
         console.warn("Failed to reconnect to stored family:", error);
         localStorage.removeItem("expense_tracker_family_id");
+        this.familyId = null;
       }
+    } else {
+      console.log("📱 No stored family ID found");
     }
   }
 

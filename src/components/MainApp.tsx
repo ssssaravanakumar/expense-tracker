@@ -1,23 +1,14 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Dashboard } from "@/components/Dashboard";
 import { BudgetSetup } from "@/components/BudgetSetup";
 import { ExpenseManager } from "@/components/ExpenseManager";
 import { Reports } from "@/components/Reports";
 import { FamilySetup } from "@/components/FamilySetup";
-import { MonthSelector } from "@/components/MonthSelector";
 import { useExpenseStore } from "@/store/useExpenseStore";
-import {
-  Settings,
-  Plus,
-  BarChart3,
-  FileText,
-  Users,
-  Wifi,
-  WifiOff,
-  RefreshCw,
-} from "lucide-react";
+import { MonthSelector } from "@/components/MonthSelector";
+import { Calendar, DollarSign, PieChart, BarChart3, Users } from "lucide-react";
 
 const MainApp: React.FC = () => {
   const [activeTab, setActiveTab] = useState<
@@ -31,7 +22,37 @@ const MainApp: React.FC = () => {
     familyId,
     isSyncing,
     syncError,
+    debugExpenses,
+    initializeFirestore,
   } = useExpenseStore();
+
+  // Automatically initialize Firestore on app start to restore family connection
+  useEffect(() => {
+    const autoInitialize = async () => {
+      try {
+        console.log("🚀 Auto-initializing Firestore on app start...");
+        await initializeFirestore();
+        console.log("✅ Firestore auto-initialization complete");
+      } catch (error) {
+        console.warn("⚠️ Firestore auto-initialization failed:", error);
+      }
+    };
+
+    autoInitialize();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run once on app start - intentionally no dependencies
+
+  // Add debug function to window for easy console access
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      (
+        window as unknown as { debugExpenses: typeof debugExpenses }
+      ).debugExpenses = debugExpenses;
+      console.log(
+        "🐛 Debug utility available: Call debugExpenses() in console to inspect store state"
+      );
+    }
+  }, [debugExpenses]);
 
   // Get available months from budget history
   const availableMonths = budgetHistory.map((budget) => budget.month);
@@ -66,17 +87,25 @@ const MainApp: React.FC = () => {
 
               {/* Sync Status Indicator */}
               {familyId && (
-                <div className="flex items-center space-x-1">
+                <div className="flex items-center space-x-2">
                   {isSyncing ? (
-                    <RefreshCw className="h-4 w-4 animate-spin text-blue-600" />
+                    <div className="flex items-center space-x-1">
+                      <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                      <span className="text-xs text-blue-600">Syncing...</span>
+                    </div>
                   ) : syncError ? (
-                    <WifiOff className="h-4 w-4 text-red-600" />
+                    <div className="flex items-center space-x-1">
+                      <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                      <span className="text-xs text-red-600">Error</span>
+                    </div>
                   ) : (
-                    <Wifi className="h-4 w-4 text-green-600" />
+                    <div className="flex items-center space-x-1">
+                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                      <span className="text-xs text-green-600">
+                        Family Connected
+                      </span>
+                    </div>
                   )}
-                  <span className="text-xs text-gray-600">
-                    {isSyncing ? "Syncing..." : familyId ? "Family" : ""}
-                  </span>
                 </div>
               )}
             </div>
@@ -137,7 +166,7 @@ const MainApp: React.FC = () => {
                 : "text-gray-600 hover:text-gray-900"
             }`}
           >
-            <Plus className="h-6 w-6" />
+            <DollarSign className="h-6 w-6" />
             <span className="text-xs mt-1">Expenses</span>
           </button>
 
@@ -149,7 +178,7 @@ const MainApp: React.FC = () => {
                 : "text-gray-600 hover:text-gray-900"
             }`}
           >
-            <Settings className="h-6 w-6" />
+            <Calendar className="h-6 w-6" />
             <span className="text-xs mt-1">Budget</span>
           </button>
 
@@ -161,7 +190,7 @@ const MainApp: React.FC = () => {
                 : "text-gray-600 hover:text-gray-900"
             }`}
           >
-            <FileText className="h-6 w-6" />
+            <PieChart className="h-6 w-6" />
             <span className="text-xs mt-1">Reports</span>
           </button>
 

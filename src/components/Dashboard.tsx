@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   PieChart,
   Pie,
@@ -25,7 +25,18 @@ import {
 const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042", "#8884D8"];
 
 export const Dashboard: React.FC = () => {
-  const { getDashboardData, currentBudget } = useExpenseStore();
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { getDashboardData, currentBudget, budgetHistory, lastSyncTime } =
+    useExpenseStore();
+
+  // Force re-render when budget data changes by subscribing to relevant state
+  const [, setRenderKey] = useState(0);
+
+  // Force re-render when expense data might have changed
+  useEffect(() => {
+    setRenderKey((prev) => prev + 1);
+  }, [currentBudget?.expenses?.length, lastSyncTime]);
+
   const dashboardData = getDashboardData();
 
   if (!currentBudget) {
