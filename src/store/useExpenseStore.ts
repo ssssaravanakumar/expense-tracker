@@ -67,6 +67,7 @@ interface ExpenseStoreState {
   ) => void;
   getDashboardData: () => DashboardData;
   getCurrentMonth: () => string;
+  debugExpenses: () => ExpenseStoreState;
 }
 
 const defaultCategories = [
@@ -91,6 +92,98 @@ const predefinedFixedExpenses = [
 
 const getTotalPredefinedFixedExpenses = () =>
   predefinedFixedExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+
+// Helper function to recalculate category spending from expenses
+const recalculateCategorySpending = (budget: MonthlyBudget): MonthlyBudget => {
+  const categorySpending = new Map<string, number>();
+
+  // Calculate spending from all expenses
+  budget.expenses.forEach((expense) => {
+    const currentSpent = categorySpending.get(expense.categoryId) || 0;
+    categorySpending.set(expense.categoryId, currentSpent + expense.amount);
+  });
+
+  // Update categories with accurate spending
+  const updatedCategories = budget.categories.map((cat) => ({
+    ...cat,
+    spentAmount: categorySpending.get(cat.id) || 0,
+  }));
+
+  return {
+    ...budget,
+    categories: updatedCategories,
+  };
+};
+
+// Intelligent data merging function to prevent data loss
+const mergeRemoteWithLocal = (
+  localBudgets: MonthlyBudget[],
+  remoteBudgets: MonthlyBudget[]
+): MonthlyBudget[] => {
+  console.log(
+    `🔄 Merging data - Local: ${localBudgets.length} budgets, Remote: ${remoteBudgets.length} budgets`
+  );
+
+  const merged: MonthlyBudget[] = [];
+
+  // Create a map of remote budgets for quick lookup
+  const remoteBudgetMap = new Map(remoteBudgets.map((b) => [b.id, b]));
+
+  // Process local budgets first to preserve local changes
+  for (const localBudget of localBudgets) {
+    const remoteBudget = remoteBudgetMap.get(localBudget.id);
+
+    if (remoteBudget) {
+      // Merge expenses from both local and remote, avoiding duplicates
+      const allExpenses = [...localBudget.expenses];
+      const localExpenseIds = new Set(localBudget.expenses.map((e) => e.id));
+
+      let addedRemoteExpenses = 0;
+      // Add remote expenses that don't exist locally
+      for (const remoteExpense of remoteBudget.expenses) {
+        if (!localExpenseIds.has(remoteExpense.id)) {
+          allExpenses.push(remoteExpense);
+          addedRemoteExpenses++;
+        }
+      }
+
+      console.log(
+        `📊 Budget ${localBudget.month}: Local=${localBudget.expenses.length}, Remote=${remoteBudget.expenses.length}, Added=${addedRemoteExpenses}, Total=${allExpenses.length}`
+      );
+
+      // Use the most recent version based on timestamps
+      const isRemoteNewer =
+        new Date(remoteBudget.createdAt) > new Date(localBudget.createdAt);
+      const baseBudget = isRemoteNewer ? remoteBudget : localBudget;
+
+      // Use the recalculation helper for consistency
+      const budgetWithMergedExpenses = {
+        ...baseBudget,
+        expenses: allExpenses,
+      };
+      merged.push(recalculateCategorySpending(budgetWithMergedExpenses));
+
+      remoteBudgetMap.delete(localBudget.id);
+    } else {
+      // Local budget doesn't exist remotely, keep it
+      console.log(
+        `📱 Keeping local-only budget: ${localBudget.month} (${localBudget.expenses.length} expenses)`
+      );
+      merged.push(localBudget);
+    }
+  }
+
+  // Add remaining remote budgets that don't exist locally
+  for (const remoteBudget of remoteBudgetMap.values()) {
+    console.log(
+      `☁️ Adding remote-only budget: ${remoteBudget.month} (${remoteBudget.expenses.length} expenses)`
+    );
+    merged.push(remoteBudget);
+  }
+
+  console.log(`✅ Merge complete: ${merged.length} total budgets`);
+  return merged;
+};
 
 export const useExpenseStore = create<ExpenseStoreState>()(
   persist(
@@ -118,9 +211,31 @@ export const useExpenseStore = create<ExpenseStoreState>()(
         set({ isInitializing: true, syncError: null });
 
         try {
+          // First try to restore from persisted state
+          let familyId = state.familyId;
+          let currentMember = state.currentMember;
+
+          console.log("🔄 Initializing Firestore...");
+          console.log("Persisted family ID:", familyId);
+          console.log("Persisted member:", currentMember?.name);
+
+          // Initialize the service (this will try localStorage if no persisted state)
           await firestoreService.initialize();
-          const familyId = firestoreService.getFamilyId();
-          const currentMember = firestoreService.getCurrentMember();
+
+          // Get family ID from service (localStorage or existing state)
+          const serviceFamilyId = firestoreService.getFamilyId();
+          const serviceMember = firestoreService.getCurrentMember();
+
+          // Use service data if we don't have persisted state
+          if (!familyId && serviceFamilyId) {
+            familyId = serviceFamilyId;
+            console.log("📱 Using family ID from localStorage:", familyId);
+          }
+
+          if (!currentMember && serviceMember) {
+            currentMember = serviceMember;
+            console.log("👤 Using member from service:", currentMember.name);
+          }
 
           set({
             familyId,
@@ -130,6 +245,10 @@ export const useExpenseStore = create<ExpenseStoreState>()(
 
           // Only set up listener if we have a family and don't already have one
           if (familyId && !state.isListenerActive) {
+            console.log(
+              "🔔 Setting up real-time listener for family:",
+              familyId
+            );
             set({ isListenerActive: true });
 
             // Set up real-time listener
@@ -140,12 +259,17 @@ export const useExpenseStore = create<ExpenseStoreState>()(
               // Prevent self-updates to avoid loops
               if (updatedBy === firestoreService.getMemberId()) return;
 
-              const currentBudget = budgets.find(
-                (b) => b.month === currentState.selectedMonth
+              // Intelligent data merging instead of replacing
+              const mergedBudgets = mergeRemoteWithLocal(
+                currentState.budgetHistory,
+                budgets
+              );
+              const currentBudget = mergedBudgets.find(
+                (b: MonthlyBudget) => b.month === currentState.selectedMonth
               );
 
               set({
-                budgetHistory: budgets,
+                budgetHistory: mergedBudgets,
                 currentBudget: currentBudget || currentState.currentBudget,
                 lastSyncTime: Date.now(),
               });
@@ -153,6 +277,11 @@ export const useExpenseStore = create<ExpenseStoreState>()(
 
             // Load initial data only once
             await get().loadFromFirestore();
+            console.log("✅ Family connection restored successfully");
+          } else if (familyId) {
+            console.log("🔗 Already connected to family:", familyId);
+          } else {
+            console.log("📱 No family to connect to - ready for setup");
           }
         } catch (error) {
           console.error("Failed to initialize Firestore:", error);
@@ -269,13 +398,19 @@ export const useExpenseStore = create<ExpenseStoreState>()(
         set({ isSyncing: true, syncError: null });
 
         try {
-          const budgets = await firestoreService.getBudgets();
-          const currentBudget = budgets.find(
-            (b) => b.month === state.selectedMonth
+          const remoteBudgets = await firestoreService.getBudgets();
+
+          // Merge remote data with local data to prevent loss
+          const mergedBudgets = mergeRemoteWithLocal(
+            state.budgetHistory,
+            remoteBudgets
+          );
+          const currentBudget = mergedBudgets.find(
+            (b: MonthlyBudget) => b.month === state.selectedMonth
           );
 
           set({
-            budgetHistory: budgets,
+            budgetHistory: mergedBudgets,
             currentBudget: currentBudget || state.currentBudget,
             isSyncing: false,
             lastSyncTime: Date.now(),
@@ -443,7 +578,7 @@ export const useExpenseStore = create<ExpenseStoreState>()(
           const fixedExpense = state.currentBudget.fixedExpenses.find(
             (fe) => fe.id === expenseId
           );
-          if (!fixedExpense || fixedExpense.isCompleted) return state;
+          if (!fixedExpense) return state;
 
           const manualExpenseId = `expense_${Date.now()}_${Math.random()}`;
           const newManualExpense: Expense = {
@@ -459,18 +594,15 @@ export const useExpenseStore = create<ExpenseStoreState>()(
             (fe) => (fe.id === expenseId ? { ...fe, isCompleted: true } : fe)
           );
 
-          const updatedCategories = state.currentBudget.categories.map((cat) =>
-            cat.id === fixedExpense.categoryId
-              ? { ...cat, spentAmount: cat.spentAmount + fixedExpense.amount }
-              : cat
-          );
-
-          const updatedBudget = {
+          const budgetWithNewExpense = {
             ...state.currentBudget,
             fixedExpenses: updatedFixedExpenses,
             expenses: [...state.currentBudget.expenses, newManualExpense],
-            categories: updatedCategories,
           };
+
+          // Recalculate all category spending
+          const updatedBudget =
+            recalculateCategorySpending(budgetWithNewExpense);
 
           const updatedHistory = state.budgetHistory.map((budget) =>
             budget.id === state.currentBudget?.id ? updatedBudget : budget
@@ -494,7 +626,9 @@ export const useExpenseStore = create<ExpenseStoreState>()(
         description: string,
         date?: string
       ) => {
-        const expenseId = `expense_${Date.now()}_${Math.random()}`;
+        const expenseId = `expense_${Date.now()}_${Math.random()
+          .toString(36)
+          .substr(2, 9)}`;
         const newExpense: Expense = {
           id: expenseId,
           categoryId,
@@ -504,23 +638,32 @@ export const useExpenseStore = create<ExpenseStoreState>()(
           type: "manual",
         };
 
+        console.log(
+          `💰 Adding expense: ${description} (${amount}) - ID: ${expenseId}`
+        );
+
         set((state) => {
-          if (!state.currentBudget) return state;
+          if (!state.currentBudget) {
+            console.error("❌ Cannot add expense: No current budget");
+            return state;
+          }
 
-          const updatedCategories = state.currentBudget.categories.map((cat) =>
-            cat.id === categoryId
-              ? { ...cat, spentAmount: cat.spentAmount + amount }
-              : cat
-          );
-
-          const updatedBudget = {
+          // Add the expense first
+          const budgetWithNewExpense = {
             ...state.currentBudget,
             expenses: [...state.currentBudget.expenses, newExpense],
-            categories: updatedCategories,
           };
+
+          // Recalculate all category spending to ensure accuracy
+          const updatedBudget =
+            recalculateCategorySpending(budgetWithNewExpense);
 
           const updatedHistory = state.budgetHistory.map((budget) =>
             budget.id === state.currentBudget?.id ? updatedBudget : budget
+          );
+
+          console.log(
+            `✅ Expense added locally. Total expenses in budget: ${updatedBudget.expenses.length}`
           );
 
           return {
@@ -529,9 +672,37 @@ export const useExpenseStore = create<ExpenseStoreState>()(
           };
         });
 
-        // Auto-sync to Firestore if connected
+        // Auto-sync to Firestore if connected with delay to prevent race conditions
         if (get().familyId) {
-          await get().syncToFirestore();
+          // Small delay to ensure local state is updated first
+          setTimeout(async () => {
+            try {
+              console.log(
+                `🔄 Syncing expense "${description}" to Firestore...`
+              );
+              await get().syncToFirestore();
+              console.log(`✅ Expense "${description}" synced to Firestore`);
+
+              // Verify the expense exists after sync
+              const currentState = get();
+              const expenseExists = currentState.currentBudget?.expenses.some(
+                (e) => e.id === expenseId
+              );
+              if (expenseExists) {
+                console.log(
+                  `✅ Expense "${description}" verified in local state after sync`
+                );
+              } else {
+                console.error(
+                  `❌ Expense "${description}" missing from local state after sync!`
+                );
+              }
+            } catch (error) {
+              console.error("Failed to sync expense to Firestore:", error);
+            }
+          }, 100);
+        } else {
+          console.log("📱 Expense saved locally (no family sync)");
         }
       },
 
@@ -550,32 +721,27 @@ export const useExpenseStore = create<ExpenseStoreState>()(
           );
           if (!expense) return state;
 
-          const oldAmount = expense.amount;
-          const oldCategoryId = expense.categoryId;
-
           const updatedExpenses = state.currentBudget.expenses.map((exp) =>
             exp.id === expenseId
-              ? { ...exp, categoryId, amount, description, date }
+              ? {
+                  ...exp,
+                  categoryId,
+                  amount,
+                  description,
+                  date,
+                }
               : exp
           );
 
-          const updatedCategories = state.currentBudget.categories.map(
-            (cat) => {
-              if (cat.id === oldCategoryId) {
-                return { ...cat, spentAmount: cat.spentAmount - oldAmount };
-              }
-              if (cat.id === categoryId) {
-                return { ...cat, spentAmount: cat.spentAmount + amount };
-              }
-              return cat;
-            }
-          );
-
-          const updatedBudget = {
+          const budgetWithUpdatedExpenses = {
             ...state.currentBudget,
             expenses: updatedExpenses,
-            categories: updatedCategories,
           };
+
+          // Recalculate all category spending
+          const updatedBudget = recalculateCategorySpending(
+            budgetWithUpdatedExpenses
+          );
 
           const updatedHistory = state.budgetHistory.map((budget) =>
             budget.id === state.currentBudget?.id ? updatedBudget : budget
@@ -606,17 +772,15 @@ export const useExpenseStore = create<ExpenseStoreState>()(
             (exp) => exp.id !== expenseId
           );
 
-          const updatedCategories = state.currentBudget.categories.map((cat) =>
-            cat.id === expense.categoryId
-              ? { ...cat, spentAmount: cat.spentAmount - expense.amount }
-              : cat
-          );
-
-          const updatedBudget = {
+          const budgetWithUpdatedExpenses = {
             ...state.currentBudget,
             expenses: updatedExpenses,
-            categories: updatedCategories,
           };
+
+          // Recalculate all category spending
+          const updatedBudget = recalculateCategorySpending(
+            budgetWithUpdatedExpenses
+          );
 
           const updatedHistory = state.budgetHistory.map((budget) =>
             budget.id === state.currentBudget?.id ? updatedBudget : budget
@@ -705,22 +869,41 @@ export const useExpenseStore = create<ExpenseStoreState>()(
           };
         }
 
+        // Recalculate spending from actual expenses to ensure accuracy
+        const categorySpending = new Map<string, number>();
+        state.currentBudget.expenses.forEach((expense) => {
+          const currentSpent = categorySpending.get(expense.categoryId) || 0;
+          categorySpending.set(
+            expense.categoryId,
+            currentSpent + expense.amount
+          );
+        });
+
         const totalBudget = state.currentBudget.categories.reduce(
           (sum, cat) => sum + cat.allocatedAmount,
           0
         );
-        const totalSpent = state.currentBudget.categories.reduce(
-          (sum, cat) => sum + cat.spentAmount,
+
+        // Calculate total spent from actual expenses, not category.spentAmount
+        const totalSpent = Array.from(categorySpending.values()).reduce(
+          (sum, amount) => sum + amount,
           0
         );
         const remainingBudget = totalBudget - totalSpent;
 
-        const categoryBreakdown = state.currentBudget.categories.map((cat) => ({
-          category: cat.name,
-          allocated: cat.allocatedAmount,
-          spent: cat.spentAmount,
-          remaining: cat.allocatedAmount - cat.spentAmount,
-        }));
+        const categoryBreakdown = state.currentBudget.categories.map((cat) => {
+          const actualSpent = categorySpending.get(cat.id) || 0;
+          return {
+            category: cat.name,
+            allocated: cat.allocatedAmount,
+            spent: actualSpent, // Use calculated value, not stored spentAmount
+            remaining: cat.allocatedAmount - actualSpent,
+          };
+        });
+
+        console.log(
+          `📊 Dashboard recalculated: Total spent ${totalSpent} from ${state.currentBudget.expenses.length} expenses`
+        );
 
         return {
           totalBudget,
@@ -734,15 +917,56 @@ export const useExpenseStore = create<ExpenseStoreState>()(
         const state = get();
         return state.selectedMonth;
       },
+
+      // Debug utility to help track expenses
+      debugExpenses: () => {
+        const state = get();
+        console.log("🔍 DEBUG: Current Store State");
+        console.log("Selected Month:", state.selectedMonth);
+        console.log("Family ID:", state.familyId);
+        console.log("Budget History:", state.budgetHistory.length, "budgets");
+
+        if (state.currentBudget) {
+          console.log("Current Budget:", {
+            id: state.currentBudget.id,
+            month: state.currentBudget.month,
+            expenseCount: state.currentBudget.expenses.length,
+            totalSpent: state.currentBudget.expenses.reduce(
+              (sum, exp) => sum + exp.amount,
+              0
+            ),
+          });
+
+          console.log("Recent Expenses:");
+          state.currentBudget.expenses
+            .sort(
+              (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+            )
+            .slice(0, 10)
+            .forEach((exp, i) => {
+              console.log(
+                `  ${i + 1}. ${exp.description} - $${exp.amount} (${new Date(
+                  exp.date
+                ).toLocaleDateString()}) [${exp.id}]`
+              );
+            });
+        } else {
+          console.log("No current budget");
+        }
+
+        return state;
+      },
     }),
     {
       name: "expense-tracker-storage",
       storage: createJSONStorage(() => localStorage),
-      // Only persist core data, not sync state
+      // Include family data in persistence
       partialize: (state) => ({
         selectedMonth: state.selectedMonth,
         budgetHistory: state.budgetHistory,
         currentBudget: state.currentBudget,
+        familyId: state.familyId,
+        currentMember: state.currentMember,
       }),
     }
   )

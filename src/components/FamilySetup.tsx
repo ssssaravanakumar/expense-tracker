@@ -49,7 +49,8 @@ export const FamilySetup: React.FC = () => {
 
   useEffect(() => {
     setMemberNameLocal(currentMember?.name || "");
-  }, [currentMember]);
+    setShowSetup(!familyId); // Hide setup when connected to family
+  }, [currentMember, familyId]);
 
   const handleCreateFamily = async () => {
     try {
@@ -207,6 +208,85 @@ export const FamilySetup: React.FC = () => {
             </ul>
           </div>
         </Card>
+      </div>
+    );
+  }
+
+  // Show family connection status
+  if (familyId && !showSetup) {
+    return (
+      <div className="p-4 space-y-4">
+        <Card className="border-green-200 bg-green-50">
+          <div className="flex items-center space-x-3 mb-4">
+            <CheckCircle className="h-6 w-6 text-green-600" />
+            <div>
+              <h3 className="text-lg font-medium text-green-900">
+                Connected to Family
+              </h3>
+              <p className="text-sm text-green-700">Family ID: {familyId}</p>
+              {currentMember && (
+                <p className="text-sm text-green-700">
+                  Member: {currentMember.name}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Family Management */}
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Your Name
+              </label>
+              <div className="flex space-x-2">
+                <Input
+                  value={memberName}
+                  onChange={(e) => setMemberNameLocal(e)}
+                  placeholder="Enter your name"
+                  className="flex-1"
+                />
+                <Button
+                  onClick={handleUpdateMemberName}
+                  disabled={
+                    !memberName.trim() || memberName === currentMember?.name
+                  }
+                  className="bg-blue-600 text-white"
+                >
+                  Update Name
+                </Button>
+              </div>
+            </div>
+
+            <div className="border-t pt-4">
+              <Button
+                onClick={() => setShowSetup(true)}
+                className="w-full bg-gray-600 text-white"
+              >
+                Manage Family Connection
+              </Button>
+            </div>
+          </div>
+        </Card>
+
+        {/* Sync Status */}
+        {syncError && (
+          <Card className="border-red-200 bg-red-50">
+            <div className="flex items-center space-x-2">
+              <AlertCircle className="h-5 w-5 text-red-600" />
+              <span className="text-sm text-red-700">{syncError}</span>
+            </div>
+          </Card>
+        )}
+
+        {lastSyncTime && (
+          <Card>
+            <div className="text-center">
+              <p className="text-sm text-gray-600">
+                Last synced: {new Date(lastSyncTime).toLocaleString()}
+              </p>
+            </div>
+          </Card>
+        )}
       </div>
     );
   }
